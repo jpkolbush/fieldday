@@ -1,2 +1,5 @@
-# fieldday
-Code for enumeration of Field Day Schedules
+mkdir build
+cd build
+cmake .. 
+cmake --build .
+./my_executable

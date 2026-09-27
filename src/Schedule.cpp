@@ -5,9 +5,9 @@ namespace FieldDay {
     {
         _dimension = dimension;
         _data = std::vector<std::vector<std::pair<size_t,size_t>>>(dimension);
-        _used_teams_by_row = std::vector<uint64_t>(dimension, 0);
-        _used_teams_by_col = std::vector<uint64_t>(dimension, 0);
-        _used_pairings = std::vector<uint64_t>(2 * dimension, 0);
+        _used_teams_by_row = std::vector<std::vector<bool>>(dimension, std::vector<bool>(2 * dimension, false));
+        _used_teams_by_col = std::vector<std::vector<bool>>(dimension, std::vector<bool>(2 * dimension, false));
+        _used_pairings = std::vector<std::vector<bool>>(2 * dimension, std::vector<bool>(2 * dimension, false));
 
         std::vector<std::pair<size_t,size_t>> first_row(dimension);
 
@@ -16,15 +16,16 @@ namespace FieldDay {
         {
             auto pair = std::pair<size_t, size_t>(2*i , 2*i + 1);
             first_row[i] = pair;
-            _used_pairings[pair.first] |= (1ULL << pair.second);
+            _used_pairings[pair.first][pair.second] = true;
 
-            _used_teams_by_col[i] |= (1ULL << pair.first) | (1ULL << pair.second);
+            _used_teams_by_col[i][pair.first] = true;
+            _used_teams_by_col[i][pair.second] = true;
         }
         _data[0] = first_row;
 
         for (size_t i = 0; i < 2 * dimension; i++)
         {
-            _used_teams_by_row[0] |= (1ULL << i);
+            _used_teams_by_row[0][i] = true;
         }
 
         _complete_up_to = std::pair<size_t,size_t>(0, dimension-1);
@@ -60,61 +61,77 @@ namespace FieldDay {
     void Schedule::update(std::pair<size_t,size_t> position, std::pair<size_t, size_t> matchup)
     {
         _data[position.first].push_back(matchup);
-        _used_pairings[matchup.first] |= (1ULL << matchup.second);
+        _used_pairings[matchup.first][matchup.second] = true;
 
-        uint64_t bits = (1ULL << matchup.first) | (1ULL << matchup.second);
-        _used_teams_by_row[position.first] |= bits;
-        _used_teams_by_col[position.second] |= bits;
+        _used_teams_by_row[position.first][matchup.first] = true;
+        _used_teams_by_row[position.first][matchup.second] = true;
+        _used_teams_by_col[position.second][matchup.first] = true;
+        _used_teams_by_col[position.second][matchup.second] = true;
         _complete_up_to = position;
     }
 
     void Schedule::undo(std::pair<size_t, size_t> position, std::pair<size_t, size_t> matchup, std::pair<size_t, size_t> prev_complete)
     {
         _data[position.first].pop_back();
-        _used_pairings[matchup.first] &= ~(1ULL << matchup.second);
+        _used_pairings[matchup.first][matchup.second] = false;
 
-        uint64_t bits = (1ULL << matchup.first) | (1ULL << matchup.second);
-        _used_teams_by_row[position.first] &= ~bits;
-        _used_teams_by_col[position.second] &= ~bits;
+        _used_teams_by_row[position.first][matchup.first] = false;
+        _used_teams_by_row[position.first][matchup.second] = false;
+        _used_teams_by_col[position.second][matchup.first] = false;
+        _used_teams_by_col[position.second][matchup.second] = false;
         _complete_up_to = prev_complete;
     }
 
+    static std::vector<size_t> get_valid_teams(const std::vector<bool>& used_in_row,
+                                                const std::vector<bool>& used_in_col)
+    {
+        std::vector<size_t> ret;
+        for (size_t i = 0; i < used_in_row.size(); i++)
+        {
+            if (!used_in_row[i] && !used_in_col[i])
+            {
+                ret.push_back(i);
+            }
+        }
+        return ret;
+    }
+
     // Shared move-enumeration core used by both counting and collecting traversals.
-    // `Visit` is called with (position, matchup) already applied via update(); it must
-    // recurse (or record) and the caller here handles the matching undo().
+    // `visit` is invoked with each legal (team, team) matchup for `next_complete`;
+    // the caller applies update()/recurses/undo() around it.
     template <typename Visit>
-    static void forEachNextMove(Schedule& s, size_t dimension,
-                                const std::vector<uint64_t>& used_teams_by_row,
-                                const std::vector<uint64_t>& used_teams_by_col,
-                                const std::vector<uint64_t>& used_pairings,
+    static void forEachNextMove(const std::vector<std::vector<bool>>& used_teams_by_row,
+                                const std::vector<std::vector<bool>>& used_teams_by_col,
+                                const std::vector<std::vector<bool>>& used_pairings,
                                 std::pair<size_t, size_t> next_complete,
                                 Visit&& visit)
     {
-        uint64_t full_mask = (dimension * 2 >= 64) ? ~0ULL : ((1ULL << (2 * dimension)) - 1);
-        uint64_t avail = full_mask & ~(used_teams_by_row[next_complete.first] | used_teams_by_col[next_complete.second]);
+        auto valid_teams = get_valid_teams(used_teams_by_row[next_complete.first], used_teams_by_col[next_complete.second]);
 
-        for (size_t t1 = 0; t1 < 2 * dimension; t1++)
+        for (auto it1 = valid_teams.begin(); it1 != valid_teams.end(); ++it1)
         {
-            if (!((avail >> t1) & 1ULL)) continue;
-            for (size_t t2 = t1 + 1; t2 < 2 * dimension; t2++)
+            for (auto it2 = std::next(it1); it2 != valid_teams.end(); ++it2)
             {
-                if (!((avail >> t2) & 1ULL)) continue;
-                if ((used_pairings[t1] >> t2) & 1ULL) continue;
+                auto matchup = std::pair<size_t, size_t>(*it1, *it2);
+                if (used_pairings[matchup.first][matchup.second])
+                {
+                    continue;
+                }
 
                 // Standard form: within row 1, always place the lower-numbered
                 // partner of a first-row pair before its partner.
-                if (next_complete.first == 1 && t1 % 2 == 1 &&
-                    !((used_teams_by_row[1] >> (t1 - 1)) & 1ULL))
+                if (next_complete.first == 1 && matchup.first % 2 == 1 &&
+                    !used_teams_by_row[1][matchup.first - 1])
                 {
                     continue;
                 }
-                if (next_complete.first == 1 && t2 % 2 == 1 &&
-                    !((used_teams_by_row[1] >> (t2 - 1)) & 1ULL))
+                if (next_complete.first == 1 && matchup.second % 2 == 1 &&
+                    !used_teams_by_row[1][matchup.second - 1])
                 {
                     continue;
                 }
 
-                visit(std::pair<size_t, size_t>(t1, t2));
+                visit(matchup);
             }
         }
     }
@@ -128,8 +145,8 @@ namespace FieldDay {
         }
 
         auto next_complete = next_position();
-        forEachNextMove(*this, _dimension, _used_teams_by_row, _used_teams_by_col, _used_pairings,
-            next_complete, [&](std::pair<size_t, size_t> matchup)
+        forEachNextMove(_used_teams_by_row, _used_teams_by_col, _used_pairings, next_complete,
+            [&](std::pair<size_t, size_t> matchup)
         {
             auto prev_complete = _complete_up_to;
             update(next_complete, matchup);
@@ -147,8 +164,8 @@ namespace FieldDay {
         }
 
         auto next_complete = next_position();
-        forEachNextMove(*this, _dimension, _used_teams_by_row, _used_teams_by_col, _used_pairings,
-            next_complete, [&](std::pair<size_t, size_t> matchup)
+        forEachNextMove(_used_teams_by_row, _used_teams_by_col, _used_pairings, next_complete,
+            [&](std::pair<size_t, size_t> matchup)
         {
             auto prev_complete = _complete_up_to;
             update(next_complete, matchup);

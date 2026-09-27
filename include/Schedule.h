@@ -1,5 +1,4 @@
 #include <vector>
-#include <cstdint>
 #include <utility>
 
 namespace FieldDay {
@@ -8,11 +7,10 @@ namespace FieldDay {
         size_t _dimension;
         std::vector<std::vector<std::pair<size_t, size_t>>> _data;
         std::pair<size_t, size_t> _complete_up_to;
-        // Bit i set => team i has already appeared in this row/column.
-        std::vector<uint64_t> _used_teams_by_row;
-        std::vector<uint64_t> _used_teams_by_col;
-        // Bit j set on _used_pairings[i] => teams i and j have already played.
-        std::vector<uint64_t> _used_pairings;
+        std::vector<std::vector<bool>> _used_teams_by_row;
+        std::vector<std::vector<bool>> _used_teams_by_col;
+        // _used_pairings[i][j] == true if teams i and j have already played each other.
+        std::vector<std::vector<bool>> _used_pairings;
 
         std::pair<size_t, size_t> next_position() const;
 
